@@ -4,10 +4,15 @@ Baseline Inference Script for Warehouse Environment.
 Runs an LLM agent against all 3 warehouse tasks and reports scores.
 Uses the OpenAI API client with environment variables for configuration.
 
-Required environment variables:
-    API_BASE_URL  — The API endpoint for the LLM
-    MODEL_NAME    — The model identifier to use
-    HF_TOKEN      — Your HuggingFace / API key
+MANDATORY REQUIREMENTS:
+- API_BASE_URL   — The API endpoint for the LLM
+- MODEL_NAME     — The model identifier to use for inference
+- HF_TOKEN       — Your Hugging Face / API key
+
+STDOUT FORMAT (REQUIRED FOR EVALUATION):
+- [START] task=<task_name> env=warehouse_env model=<model_name>
+- [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+- [END]   success=<true|false> steps=<n> rewards=<r1,r2,...,rn>
 
 Usage:
     export API_BASE_URL="https://api.openai.com/v1"
@@ -26,13 +31,33 @@ from openai import OpenAI
 
 # ─── Configuration ──────────────────────────────────────
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+API_BASE_URL = os.environ.get("API_BASE_URL")
+MODEL_NAME = os.environ.get("MODEL_NAME")
 HF_TOKEN = os.environ.get("HF_TOKEN", os.environ.get("OPENAI_API_KEY", ""))
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:8000")
+BENCHMARK = "warehouse_env"
 
 TASKS = ["easy", "medium", "hard"]
 MAX_AGENT_STEPS = 50  # max LLM calls per task
+
+
+def format_action_str(tool_name: str, tool_args: dict) -> str:
+    """Format action as a human-readable string."""
+    if tool_name == "move":
+        return f"move('{tool_args.get('direction', 'up')}')"
+    elif tool_name == "pick_item":
+        return f"pick_item('{tool_args.get('item_id', '')}')"
+    elif tool_name == "deliver_order":
+        return f"deliver_order('{tool_args.get('order_id', '')}')"
+    elif tool_name == "view_warehouse":
+        return "view_warehouse()"
+    elif tool_name == "list_tasks":
+        return "list_tasks()"
+    elif tool_name == "get_score":
+        return "get_score()"
+    else:
+        return f"{tool_name}({json.dumps(tool_args)})"
+
 
 # ─── OpenAI Client Setup ───────────────────────────────
 
@@ -129,19 +154,24 @@ def parse_llm_action(response_text: str) -> tuple[str, dict]:
     return "view_warehouse", {}
 
 
-def run_task(task_id: str) -> float:
-    """Run the agent on a single task. Returns the score."""
-    print(f"\n{'='*60}")
-    print(f"[START] task={task_id}")
-    print(f"{'='*60}")
+def run_task(task_id: str) -> dict:
+    """
+    Run the agent on a single task.
+    Returns: dict with score, steps, rewards list, and success status.
+    """
+    # [START] — Task begins
+    print(f"[START] task={task_id} env={BENCHMARK} model={MODEL_NAME}")
 
     # Reset environment
-    reset_result = env_reset(task_id)
-    metadata = reset_result.get("observation", {}).get("metadata", {})
-    task_desc = metadata.get("task_description", task_id)
-    print(f"  Task: {task_desc}")
+    try:
+        reset_result = env_reset(task_id)
+        metadata = reset_result.get("observation", {}).get("metadata", {})
+        task_desc = metadata.get("task_description", task_id)
+    except Exception as e:
+        print(f"[END] success=false steps=0 rewards= error={json.dumps(str(e))}")
+        return {"score": 0.0, "steps": 0, "rewards": [], "success": False, "error": str(e)}
 
-    # Get initial warehouse view
+    # Initialize conversation
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -152,7 +182,8 @@ def run_task(task_id: str) -> float:
 
     done = False
     step_num = 0
-    total_reward = 0.0
+    rewards = []
+    last_error = None
 
     while not done and step_num < MAX_AGENT_STEPS:
         step_num += 1
@@ -167,11 +198,15 @@ def run_task(task_id: str) -> float:
             )
             llm_text = response.choices[0].message.content or ""
         except Exception as e:
-            print(f"  [STEP] step={step_num} error=\"LLM call failed: {e}\"")
+            last_error = str(e)
+            error_msg = f"LLM call failed: {e}"
+            action_str = "error"
+            print(f"[STEP] step={step_num} action={action_str} reward=0.00 done=false error={json.dumps(error_msg)}")
             break
 
         # Parse action from LLM
         tool_name, tool_args = parse_llm_action(llm_text)
+        action_str = format_action_str(tool_name, tool_args)
 
         # Execute action in environment
         try:
@@ -179,7 +214,7 @@ def run_task(task_id: str) -> float:
             obs = result.get("observation", {})
             reward = result.get("reward", 0.0)
             done = result.get("done", False)
-            total_reward += reward
+            rewards.append(reward)
 
             # Extract result text for the LLM
             obs_meta = obs.get("metadata", {})
@@ -188,13 +223,10 @@ def run_task(task_id: str) -> float:
             else:
                 result_text = json.dumps(obs_meta, indent=2)
 
-            print(
-                f"  [STEP] step={step_num} "
-                f"tool={tool_name} "
-                f"args={json.dumps(tool_args)} "
-                f"reward={reward} "
-                f"done={done}"
-            )
+            # [STEP] — Each step of the episode
+            done_str = "true" if done else "false"
+            error_str = "null"
+            print(f"[STEP] step={step_num} action={action_str} reward={reward:.2f} done={done_str} error={error_str}")
 
             # Add to conversation
             messages.append({"role": "assistant", "content": llm_text})
@@ -204,7 +236,10 @@ def run_task(task_id: str) -> float:
             })
 
         except Exception as e:
-            print(f"  [STEP] step={step_num} error=\"Env call failed: {e}\"")
+            last_error = str(e)
+            error_msg = str(e)
+            done_str = "false"
+            print(f"[STEP] step={step_num} action={action_str} reward=0.00 done={done_str} error={json.dumps(error_msg)}")
             messages.append({"role": "assistant", "content": llm_text})
             messages.append({
                 "role": "user",
@@ -212,60 +247,68 @@ def run_task(task_id: str) -> float:
             })
 
     # Get final score
+    final_score = 0.0
     try:
         score_result = env_call_tool("get_score", {})
         score_meta = score_result.get("observation", {}).get("metadata", {})
         if "result" in score_meta:
             score_data = json.loads(score_meta["result"])
-            score = score_data.get("score", 0.0)
+            final_score = score_data.get("score", 0.0)
         else:
-            score = 0.0
-    except Exception:
-        score = 0.0
+            final_score = 0.0
+    except Exception as e:
+        final_score = 0.0
 
-    print(
-        f"[END] task={task_id} "
-        f"score={score} "
-        f"steps={step_num} "
-        f"total_reward={round(total_reward, 4)}"
-    )
+    # [END] — Episode complete
+    success = final_score > 0.0 and not last_error
+    success_str = "true" if success else "false"
+    rewards_str = ",".join([f"{r:.2f}" for r in rewards]) if rewards else ""
+    
+    if last_error:
+        error_json = json.dumps(last_error)
+        print(f"[END] success={success_str} steps={step_num} rewards={rewards_str} error={error_json}")
+    else:
+        print(f"[END] success={success_str} steps={step_num} rewards={rewards_str}")
 
-    return score
+    return {
+        "score": final_score,
+        "steps": step_num,
+        "rewards": rewards,
+        "success": success,
+        "error": last_error,
+    }
 
 
-# ─── Main ───────────────────────────────────────────────
+# ─── Run all tasks ──────────────────────────────────────
 
 def main():
-    """Run inference on all tasks and report results."""
-    print("=" * 60)
-    print("  Warehouse Environment — Baseline Inference")
-    print(f"  Model: {MODEL_NAME}")
-    print(f"  API: {API_BASE_URL}")
-    print(f"  Environment: {ENV_URL}")
-    print("=" * 60)
-
+    """Run inference on all tasks and validate configuration."""
+    # Validate required environment variables
+    if not API_BASE_URL:
+        print("ERROR: API_BASE_URL environment variable not set", file=sys.stderr)
+        sys.exit(1)
+    if not MODEL_NAME:
+        print("ERROR: MODEL_NAME environment variable not set", file=sys.stderr)
+        sys.exit(1)
     if not HF_TOKEN:
-        print("ERROR: Set HF_TOKEN or OPENAI_API_KEY environment variable.")
+        print("ERROR: HF_TOKEN or OPENAI_API_KEY environment variable not set", file=sys.stderr)
         sys.exit(1)
 
+    # Run tasks
     results = {}
     for task_id in TASKS:
         try:
-            score = run_task(task_id)
-            results[task_id] = score
+            result = run_task(task_id)
+            results[task_id] = result
         except Exception as e:
-            print(f"[END] task={task_id} score=0.0 error=\"{e}\"")
-            results[task_id] = 0.0
-
-    # Summary
-    print("\n" + "=" * 60)
-    print("  RESULTS SUMMARY")
-    print("=" * 60)
-    for task_id, score in results.items():
-        print(f"  {task_id:10s}: {score:.4f}")
-    avg = sum(results.values()) / len(results)
-    print(f"  {'average':10s}: {avg:.4f}")
-    print("=" * 60)
+            print(f"[END] success=false steps=0 rewards= error={json.dumps(str(e))}")
+            results[task_id] = {
+                "score": 0.0,
+                "steps": 0,
+                "rewards": [],
+                "success": False,
+                "error": str(e),
+            }
 
 
 if __name__ == "__main__":

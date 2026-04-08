@@ -1,3 +1,13 @@
+---
+title: Warehouse Order Fulfillment
+emoji: 🏭
+colorFrom: blue
+colorTo: yellow
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # 🏭 Warehouse Order Fulfillment — OpenEnv Environment
 
 A real-world **warehouse operations** RL environment built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv). An AI agent navigates a grid-based warehouse, picks items from shelves, and delivers customer orders — simulating the core challenge faced by Amazon, Ocado, and warehouse robotics companies worldwide.

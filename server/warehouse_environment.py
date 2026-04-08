@@ -51,6 +51,10 @@ class WarehouseEnvironment(MCPEnvironment):
         mcp = FastMCP("warehouse_env")
         self._sim: Optional[WarehouseSimulation] = None
         self._current_task: str = "easy"
+        
+        # Initialize with default easy task so tools don't fail immediately
+        default_config = get_task_config("easy")
+        self._sim = WarehouseSimulation(default_config)
 
         # We need to capture self for closures
         env_ref = self
@@ -69,7 +73,9 @@ class WarehouseEnvironment(MCPEnvironment):
             Call this first after reset to understand the warehouse layout.
             """
             if env_ref._sim is None:
-                return json.dumps({"error": "Environment not initialized. Call reset first."})
+                # Initialize with default if not already done
+                default_config = get_task_config("easy")
+                env_ref._sim = WarehouseSimulation(default_config)
             obs = env_ref._sim.get_observation()
             return json.dumps(obs, indent=2)
 
@@ -220,27 +226,30 @@ class WarehouseEnvironment(MCPEnvironment):
         # Build initial observation info
         obs_data = self._sim.get_observation()
 
+        # Create metadata with warehouse info (as dict, not JSON string)
+        metadata = {
+            "status": "ready",
+            "task": task_id,
+            "task_description": TASK_DESCRIPTIONS.get(task_id, ""),
+            "grid_size": [config.grid_rows, config.grid_cols],
+            "num_orders": len(config.orders),
+            "num_items": len(config.items),
+            "max_steps": config.max_steps,
+            "warehouse": obs_data,
+            "instructions": (
+                "You are a warehouse agent. Use the tools to navigate the warehouse, "
+                "pick items from shelves, and deliver them to fulfill orders. "
+                "Call view_warehouse() to see the layout. "
+                "Use move(direction) to navigate. "
+                "Use pick_item(item_id) when adjacent to a shelf with the item. "
+                "Use deliver_order(order_id) at the packing station."
+            ),
+        }
+
         return Observation(
             done=False,
             reward=0.0,
-            metadata={
-                "status": "ready",
-                "task": task_id,
-                "task_description": TASK_DESCRIPTIONS.get(task_id, ""),
-                "grid_size": [config.grid_rows, config.grid_cols],
-                "num_orders": len(config.orders),
-                "num_items": len(config.items),
-                "max_steps": config.max_steps,
-                "warehouse": obs_data,
-                "instructions": (
-                    "You are a warehouse agent. Use the tools to navigate the warehouse, "
-                    "pick items from shelves, and deliver them to fulfill orders. "
-                    "Call view_warehouse() to see the layout. "
-                    "Use move(direction) to navigate. "
-                    "Use pick_item(item_id) when adjacent to a shelf with the item. "
-                    "Use deliver_order(order_id) at the packing station."
-                ),
-            },
+            metadata=metadata,
         )
 
     def _step_impl(
