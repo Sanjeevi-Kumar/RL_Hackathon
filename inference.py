@@ -26,8 +26,12 @@ import os
 import sys
 import time
 import requests
+from pathlib import Path
 
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ─── Configuration ──────────────────────────────────────
 
@@ -284,14 +288,32 @@ def run_task(task_id: str) -> dict:
 def main():
     """Run inference on all tasks and validate configuration."""
     # Validate required environment variables
+    errors = []
+    
     if not API_BASE_URL:
-        print("ERROR: API_BASE_URL environment variable not set", file=sys.stderr)
-        sys.exit(1)
+        errors.append("API_BASE_URL: The API endpoint for the LLM (e.g., https://api.openai.com/v1)")
     if not MODEL_NAME:
-        print("ERROR: MODEL_NAME environment variable not set", file=sys.stderr)
-        sys.exit(1)
+        errors.append("MODEL_NAME: The model identifier (e.g., gpt-4o-mini)")
     if not HF_TOKEN:
-        print("ERROR: HF_TOKEN or OPENAI_API_KEY environment variable not set", file=sys.stderr)
+        errors.append("HF_TOKEN or OPENAI_API_KEY: Your API key for authentication")
+    
+    if errors:
+        print("\n" + "="*70, file=sys.stderr)
+        print("ERROR: Missing required environment variables", file=sys.stderr)
+        print("="*70, file=sys.stderr)
+        print("\nFix this by setting the following variables:\n", file=sys.stderr)
+        for error in errors:
+            print(f"  export {error.split(':')[0]}='<value>'", file=sys.stderr)
+        print("\nOr create a .env file in the current directory with:", file=sys.stderr)
+        print("  API_BASE_URL=<value>", file=sys.stderr)
+        print("  MODEL_NAME=<value>", file=sys.stderr)
+        print("  HF_TOKEN=<value>", file=sys.stderr)
+        print("\nExample bash commands:", file=sys.stderr)
+        print('  export API_BASE_URL="https://api.openai.com/v1"', file=sys.stderr)
+        print('  export MODEL_NAME="gpt-4o-mini"', file=sys.stderr)
+        print('  export HF_TOKEN="your-api-key"', file=sys.stderr)
+        print("  python inference.py", file=sys.stderr)
+        print("="*70 + "\n", file=sys.stderr)
         sys.exit(1)
 
     # Run tasks
