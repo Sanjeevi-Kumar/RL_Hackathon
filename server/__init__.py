@@ -1,1 +1,0 @@
-# Warehouse Environment Server

@@ -1,5 +1,5 @@
 ---
-title: Warehouse Order Fulfillment
+title: Warehouse RL Environment
 emoji: 🏭
 colorFrom: blue
 colorTo: yellow
@@ -8,131 +8,82 @@ app_port: 8000
 pinned: false
 ---
 
-# 🏭 Warehouse Order Fulfillment — OpenEnv Environment
+# 🏭 Warehouse RL Environment — Meta OpenEnv Hackathon
 
-A real-world **warehouse operations** RL environment built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv). An AI agent navigates a grid-based warehouse, picks items from shelves, and delivers customer orders — simulating the core challenge faced by Amazon, Ocado, and warehouse robotics companies worldwide.
-
-## 🎯 Why Warehouse Operations?
-
-Warehouse order picking is a **multi-billion dollar logistics problem**. Companies actively train RL agents for exactly this task: deciding which items to pick, which routes to take, and how to prioritize orders under time pressure. This environment models that decision-making process.
+> **OpenEnv-compliant, stateful, multi-objective Reinforcement Learning environment
+> for multi-product warehouse navigation with LLM-powered agent inference.**
 
 ---
 
-## 🔧 Environment Overview
+## 🎯 Overview
 
-### Architecture
-```
-Agent ←→ MCP Tools ←→ Warehouse Simulation
-              │
-    ┌─────────┼──────────┐
-    │         │          │
- move()  pick_item()  deliver_order()
-```
+This environment challenges an RL agent to operate an autonomous robot inside a
+**12×12 warehouse grid** filled with shelf obstacles, forklift collision zones,
+and 15 products spread across three priority tiers. The agent must:
 
-### Action Space (MCP Tools)
+1. **Navigate** around shelves and collision zones
+2. **Collect** products in priority order (HIGH → MEDIUM → LOW)
+3. **Manage battery** by visiting recharge stations proactively
+4. **Deposit** collected items at the loading dock
+5. **Maximise score** within 200 steps
 
-| Tool | Args | Description |
-|------|------|-------------|
-| `view_warehouse()` | — | Get full warehouse state (grid, items, orders, agent position) |
-| `move(direction)` | `"up"` `"down"` `"left"` `"right"` | Move agent through warehouse aisles |
-| `pick_item(item_id)` | `"item_1"`, etc. | Pick item from adjacent shelf |
-| `deliver_order(order_id)` | `"order_1"`, etc. | Deliver order at packing station |
-| `list_tasks()` | — | See available task difficulties |
-| `get_score()` | — | Get graded score (0.0–1.0) |
-
-### Observation Space
-
-Each tool call returns a JSON result containing:
-- **Agent position** `[row, col]` on the grid
-- **Inventory**: items currently held
-- **Grid layout**: shelf positions and aisles
-- **Items on shelves**: available items with positions
-- **Orders**: status, required items, priority, progress
-- **Episode info**: steps remaining, cumulative reward, done flag
-
-### Reward Function
-
-| Event | Reward |
-|-------|--------|
-| Correct item picked | `+0.1` |
-| Order fulfilled | `+0.3` |
-| High-priority order early | `+0.2` bonus |
-| Each step (time cost) | `-0.01` |
-| Invalid action | `-0.05` |
-
-Final score normalized to **[0.0, 1.0]** based on: orders fulfilled (60%), items progress (20%), efficiency (10%), valid actions (10%).
+The multi-phase nature forces the LLM/agent to **reason across many turns** — exactly
+what the OpenEnv hackathon judges are looking for.
 
 ---
 
-## 📋 Tasks
+## 🗂️ Project Structure
 
-| Task | Difficulty | Grid | Orders | Items | Max Steps |
-|------|-----------|------|--------|-------|-----------|
-| `easy` | ⭐ | 6×6 | 1 | 2 | 30 |
-| `medium` | ⭐⭐ | 8×8 | 3 | 6 | 60 |
-| `hard` | ⭐⭐⭐ | 10×10 | 5 (with priorities) | 10 | 80 |
-
-- **Easy**: Pick 2 items, deliver 1 order. Teaches basic navigation and mechanics.
-- **Medium**: 3 orders with 6 items spread across a larger grid. Requires route planning.
-- **Hard**: 5 orders with urgency priorities on a 10×10 grid. Demands optimal routing and order prioritization under time pressure.
+```
+warehouse_env/
+├── src/
+│   └── envs/
+│       └── warehouse_env/
+│           ├── __init__.py
+│           ├── models.py          ← Action / Observation / State (Pydantic)
+│           ├── client.py          ← HTTP client (type-safe)
+│           └── server/
+│               ├── __init__.py
+│               ├── environment.py ← Core RL logic, step(), reset()
+│               └── app.py         ← FastAPI server + built-in /web UI
+├── inference.py                   ← LLM agent loop (HF Router API)
+├── requirements.txt
+├── Dockerfile
+└── README.md
+```
 
 ---
 
-## 🚀 Setup & Usage
+## ⚡ Quick Start
 
-### Prerequisites
-- Python ≥ 3.10
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+### 1. Install dependencies
 
-### Install
 ```bash
-git clone <your-repo-url>
-cd warehouse_env
-
-# Using uv (recommended)
-uv sync
-
-# Or using pip
-pip install -e .
+pip install -r requirements.txt
 ```
 
-### Run Server Locally
-```bash
-# With uv
-uv run server
+### 2. Start the environment server
 
-# Or with uvicorn directly
-uvicorn server.app:app --host 0.0.0.0 --port 8000 --reload
+```bash
+uvicorn src.envs.warehouse_env.server.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Test the API
+### 3. Open the built-in Web UI
+
+Navigate to **http://localhost:8000/web** — you'll see a live interactive warehouse
+grid where you can manually control the agent and inspect every product.
+
+### 4. Run the LLM inference loop
+
 ```bash
-# Health check
-curl http://localhost:8000/health
-# → {"status": "healthy"}
+export HF_TOKEN=hf_your_token_here
+python inference.py --model meta-llama/Llama-3.1-70B-Instruct --max_steps 80 --verbose
 ```
 
-### Use the Client
-```python
-from warehouse_env import WarehouseEnv
+### 5. Multi-episode evaluation
 
-with WarehouseEnv(base_url="http://localhost:8000") as env:
-    env.reset(task="easy")
-    
-    # See the warehouse
-    warehouse = env.call_tool("view_warehouse")
-    print(warehouse)
-    
-    # Navigate and pick
-    env.call_tool("move", direction="up")
-    env.call_tool("pick_item", item_id="item_1")
-    
-    # Deliver
-    env.call_tool("deliver_order", order_id="order_1")
-    
-    # Check score
-    score = env.call_tool("get_score")
-    print(score)
+```bash
+python inference.py --episodes 5 --eval --max_steps 80
 ```
 
 ---
@@ -141,77 +92,125 @@ with WarehouseEnv(base_url="http://localhost:8000") as env:
 
 ```bash
 # Build
-docker build -t warehouse-env -f server/Dockerfile .
+docker build -t warehouse-rl-env .
 
 # Run
-docker run -d -p 8000:8000 warehouse-env
+docker run -p 8000:8000 warehouse-rl-env
 
-# Connect
-curl http://localhost:8000/health
+# With HF token for inference (run inference.py separately)
+docker run -p 8000:8000 -e HF_TOKEN=$HF_TOKEN warehouse-rl-env
 ```
 
 ---
 
-## 🤖 Baseline Inference
+## 📐 Environment Design
 
-The inference script uses an LLM to play through all 3 tasks:
+### Grid (12×12)
 
-```bash
-export API_BASE_URL="https://api.openai.com/v1"
-export MODEL_NAME="gpt-4o-mini"
-export HF_TOKEN="your-api-key"
-export ENV_URL="http://localhost:8000"
+| Symbol | Meaning                        |
+| ------ | ------------------------------ |
+| `R`  | Robot agent                    |
+| `★` | Loading dock (goal)            |
+| `⚡` | Recharge station               |
+| `■` | Shelf obstacle (wall)          |
+| `⬛` | Forklift collision zone (wall) |
+| `🔴` | High-priority product          |
+| `🟠` | Medium-priority product        |
+| `🟢` | Low-priority product           |
 
-python inference.py
-```
+### Reward Function
 
-### Expected Baseline Scores
+| Event                             | Reward                              |
+| --------------------------------- | ----------------------------------- |
+| Deposit high-priority product     | `+value × 2.0`                   |
+| Deposit medium-priority product   | `+value × 1.3`                   |
+| Deposit low-priority product      | `+value × 1.0`                   |
+| Per movement step                 | `-0.05`                           |
+| Carrying weight > 0               | `-0.03 × n_items` extra per step |
+| Invalid action (wall/obstacle)    | `-1.00`                           |
+| Repeated invalid actions          | `-0.30 × consecutive_count`      |
+| Battery < 20%                     | `-0.30` per step                  |
+| Battery exhausted                 | `-5.00` + episode ends            |
+| All high-priority deposited first | `+5.00` bonus                     |
+| All products deposited            | `+10.00` completion bonus         |
 
-| Task | Expected Score |
-|------|---------------|
-| easy | ~0.7–0.9 |
-| medium | ~0.4–0.6 |
-| hard | ~0.2–0.4 |
+### Why It Requires Multi-Turn Reasoning
 
-Scores depend on the model used. GPT-4o-mini should pass easy, partially solve medium, and struggle with hard.
-
----
-
-## 📁 Project Structure
-
-```
-warehouse_env/
-├── __init__.py              # Package exports
-├── client.py                # MCPToolClient subclass
-├── models.py                # Pydantic type documentation
-├── openenv.yaml             # OpenEnv manifest
-├── pyproject.toml           # Dependencies
-├── inference.py             # Baseline LLM inference
-├── README.md                # This file
-├── .dockerignore
-└── server/
-    ├── __init__.py
-    ├── warehouse_environment.py  # MCPEnvironment implementation
-    ├── warehouse_logic.py        # Core simulation logic
-    ├── tasks.py                  # Task definitions & graders
-    ├── app.py                    # FastAPI server
-    ├── Dockerfile
-    └── requirements.txt
-```
+- The agent must **plan routes** across a large grid with obstacles
+- **Battery management** requires anticipating future energy needs
+- **Inventory management** (max 3 items) requires batching decisions
+- **Priority ordering** requires global awareness of the product manifest
+- **Deposit/recharge tradeoffs** depend on inventory state + distance to dock
 
 ---
 
-## 📄 Environment Variables
+## 🤖 LLM Agent Design
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `API_BASE_URL` | LLM API endpoint | For inference |
-| `MODEL_NAME` | Model identifier | For inference |
-| `HF_TOKEN` | HuggingFace / API key | For inference |
-| `ENV_URL` | Environment server URL | For inference (default: localhost:8000) |
+The LLM receives a rich, structured prompt including:
+
+- Agent position, battery level, inventory
+- Full product manifest with distances and priority
+- 5×5 visible cell grid around the agent
+- Recent action history (last 6 steps)
+- Environment-generated reasoning hint
+- Last action result
+
+The LLM outputs structured JSON:
+
+```json
+{
+  "reasoning": "Battery at 18% — must recharge before collecting more items.",
+  "movement": "north",
+  "interact": "recharge",
+  "target_sku": null
+}
+```
 
 ---
 
-## License
+## 🔌 OpenEnv API
 
-MIT
+All endpoints follow the OpenEnv standard:
+
+```
+POST /reset    → Observation   Start new episode
+POST /step     → Observation   Execute one action
+GET  /state    → State         Full internal state
+GET  /web      → HTML          Browser UI
+GET  /health   → dict          Liveness check
+```
+
+### Python Client
+
+```python
+from src.envs.warehouse_env.client import WarehouseEnvClient
+from src.envs.warehouse_env.models import Action
+
+env = WarehouseEnvClient(base_url="http://localhost:8000")
+obs = env.reset()
+
+# Manual action
+obs = env.step(Action(movement="north", interact="pickup", target_sku="SKU-H1"))
+
+# Shorthand helpers
+obs = env.move("east")
+obs = env.pickup("SKU-H2")
+obs = env.deposit()
+obs = env.recharge()
+
+state = env.state()   # full internal state
+```
+
+---
+
+## 🏆 Hackathon Judging Criteria
+
+| Criterion                    | How We Satisfy It                                                       |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| **Complexity**         | 15 products × 3 priorities, battery management, obstacle navigation    |
+| **Statefulness**       | Full `State` persists between steps; multi-phase episode structure    |
+| **Reasoning required** | Route planning, inventory batching, priority ordering, energy tradeoffs |
+| **OpenEnv compliance** | `step()`, `reset()`, `state()` via FastAPI; Pydantic schemas      |
+| **Built-in UI**        | `/web` endpoint with live canvas rendering of the full grid           |
+| **LLM integration**    | HF Router API + chain-of-thought prompting + JSON action parsing        |
+| **Dockerised**         | Single `Dockerfile` for reproducible deployment                       |
